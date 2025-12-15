@@ -6,13 +6,16 @@ import { cn } from "@/lib/utils";
 import { useUser } from "@/hooks/useUser";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Home, Book, PenTool, Trophy, User, Flame, Heart, Crown, Zap } from "lucide-react";
+import { Home, Book, PenTool, Trophy, User, Flame, Heart, Crown, Zap, Target, BarChart3, Brain } from "lucide-react";
 import { getXPForNextLevel } from "@/lib/utils";
 
 const navItems = [
   { href: "/dashboard", label: "Home", icon: Home },
   { href: "/learn", label: "Learn", icon: Book },
+  { href: "/challenge", label: "Daily Challenge", icon: Target },
+  { href: "/review", label: "Review", icon: Brain },
   { href: "/practice", label: "Practice", icon: PenTool },
+  { href: "/stats", label: "Statistics", icon: BarChart3 },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
   { href: "/profile", label: "Profile", icon: User },
 ];
