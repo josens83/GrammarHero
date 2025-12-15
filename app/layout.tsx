@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/providers/theme-provider";
+import { SkipLink } from "@/components/common/SkipLink";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -10,6 +11,11 @@ export const metadata: Metadata = {
   title: "GrammarHero - Master English Grammar with AI",
   description: "GrammarHero uses AI to personalize your English grammar learning journey. Fun, effective, and free to start.",
   keywords: ["English grammar", "learn English", "grammar learning", "AI tutor", "language learning"],
+  openGraph: {
+    title: "GrammarHero - Master English Grammar with AI",
+    description: "GrammarHero uses AI to personalize your English grammar learning journey. Fun, effective, and free to start.",
+    type: "website",
+  },
 };
 
 export const viewport: Viewport = {
@@ -26,7 +32,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          {children}
+          {/* Skip link for keyboard accessibility */}
+          <SkipLink />
+
+          {/* Main content with skip link target */}
+          <div id="main-content" tabIndex={-1} className="outline-none">
+            {children}
+          </div>
+
           <Toaster />
         </ThemeProvider>
       </body>

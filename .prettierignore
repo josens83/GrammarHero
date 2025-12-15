@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+.next/
+out/
+build/
+dist/
+
+# Coverage
+coverage/
+
+# Generated files
+*.min.js
+*.min.css
+
+# Package manager files
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Public assets
+public/
+
+# Environment files
+.env*
+
+# IDE
+.idea/
+.vscode/
+
+# Test snapshots
+**/*.snap
