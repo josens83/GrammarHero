@@ -5,7 +5,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useUser } from "@/hooks/useUser";
@@ -31,42 +31,145 @@ import {
 } from "lucide-react";
 import { getXPForNextLevel, formatNumber } from "@/lib/utils";
 import { GRAMMAR_CATEGORIES } from "@/lib/constants";
-import { sampleLessons } from "@/lib/lessons/sample-lessons";
+
+interface DashboardData {
+  lessonProgress: Array<{
+    lesson_id: string;
+    status: string;
+    score: number;
+    lessons?: { title: string; category_id: string };
+  }>;
+  dailyActivity: Array<{
+    date: string;
+    xp_earned: number;
+    lessons_completed: number;
+  }>;
+  stats: {
+    completedLessons: number;
+    weeklyXp: number;
+  };
+}
+
+interface ReviewData {
+  dueCount: number;
+}
+
+interface LeaderboardData {
+  userRank: {
+    rank: number;
+  } | null;
+}
+
+interface StreakFreezeData {
+  available: number;
+}
 
 export default function DashboardPage() {
   const { user, isLoading } = useUser();
   const router = useRouter();
-  const [streakFreezes, setStreakFreezes] = useState(2);
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [reviewData, setReviewData] = useState<ReviewData | null>(null);
+  const [leaderboardData, setLeaderboardData] = useState<LeaderboardData | null>(null);
+  const [streakFreezes, setStreakFreezes] = useState<number>(0);
+  const [isLoadingData, setIsLoadingData] = useState(true);
 
-  if (isLoading) return <PageLoader />;
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      if (!user) return;
+
+      try {
+        const [progressRes, reviewRes, leaderboardRes, freezeRes] = await Promise.all([
+          fetch("/api/progress"),
+          fetch("/api/review?due=true&limit=1"),
+          fetch("/api/leaderboard?limit=1"),
+          fetch("/api/streak/freeze"),
+        ]);
+
+        if (progressRes.ok) {
+          const data = await progressRes.json();
+          setDashboardData(data.data);
+        }
+
+        if (reviewRes.ok) {
+          const data = await reviewRes.json();
+          setReviewData(data.data);
+        }
+
+        if (leaderboardRes.ok) {
+          const data = await leaderboardRes.json();
+          setLeaderboardData(data.data);
+        }
+
+        if (freezeRes.ok) {
+          const data = await freezeRes.json();
+          setStreakFreezes(data.data.available || 0);
+        }
+      } catch (error) {
+        console.error("Failed to fetch dashboard data:", error);
+      } finally {
+        setIsLoadingData(false);
+      }
+    };
+
+    if (user) {
+      fetchDashboardData();
+    }
+  }, [user]);
+
+  const handleUseStreakFreeze = async () => {
+    if (streakFreezes <= 0) return;
+
+    try {
+      const res = await fetch("/api/streak/freeze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "use" }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setStreakFreezes(data.data.remaining);
+      }
+    } catch (error) {
+      console.error("Failed to use streak freeze:", error);
+    }
+  };
+
+  if (isLoading || isLoadingData) return <PageLoader />;
   if (!user) return <PageLoader />;
 
   const xpProgress = getXPForNextLevel(user.totalXp);
 
-  // Get actual lessons for display
-  const recentLessons = sampleLessons.slice(0, 3).map((lesson) => ({
-    id: lesson.id,
-    title: lesson.title,
-    category: lesson.category,
-    progress: Math.floor(Math.random() * 101), // Demo progress
-  }));
-
-  // Today's progress (demo data - would come from API in production)
+  // Calculate today's progress
+  const today = new Date().toISOString().split("T")[0];
+  const todayActivity = dashboardData?.dailyActivity?.find((d) => d.date === today);
   const todayProgress = {
-    lessonsCompleted: 2,
+    lessonsCompleted: todayActivity?.lessons_completed || 0,
     dailyGoal: user.dailyGoal,
-    xpEarned: 35,
+    xpEarned: todayActivity?.xp_earned || 0,
   };
 
-  // Last activity (simulated)
-  const lastActivityDate = new Date();
-  lastActivityDate.setHours(lastActivityDate.getHours() - 20);
+  // Get recent lessons from progress
+  const recentLessons = (dashboardData?.lessonProgress || [])
+    .filter((p) => p.lessons)
+    .slice(0, 3)
+    .map((p) => ({
+      id: p.lesson_id,
+      title: p.lessons?.title || "Lesson",
+      category: p.lessons?.category_id || "Grammar",
+      progress: p.status === "completed" ? 100 : (p.score || 0),
+      status: p.status,
+    }));
 
-  const handleUseStreakFreeze = () => {
-    if (streakFreezes > 0) {
-      setStreakFreezes((prev) => prev - 1);
-    }
-  };
+  // If no recent lessons, show default starters
+  const displayLessons = recentLessons.length > 0 ? recentLessons : [
+    { id: "present-simple", title: "Present Simple", category: "Tenses", progress: 0, status: "available" },
+    { id: "articles-basics", title: "Articles: A, An, The", category: "Articles", progress: 0, status: "available" },
+    { id: "prepositions-place", title: "Prepositions of Place", category: "Prepositions", progress: 0, status: "available" },
+  ];
+
+  // Last activity date
+  const lastActivityDate = user.lastActivityDate ? new Date(user.lastActivityDate) : new Date();
 
   return (
     <div className="p-6 space-y-6">
@@ -181,7 +284,7 @@ export default function DashboardPage() {
             />
             {todayProgress.lessonsCompleted >= todayProgress.dailyGoal && (
               <p className="text-sm text-green-600 font-medium">
-                🎉 Daily goal completed! Great job!
+                Daily goal completed! Great job!
               </p>
             )}
           </div>
@@ -205,7 +308,9 @@ export default function DashboardPage() {
             <CardContent className="p-4 flex flex-col items-center justify-center text-center">
               <Brain className="h-8 w-8 text-purple-500 mb-2" />
               <p className="font-medium">Review</p>
-              <p className="text-xs text-muted-foreground">5 items due</p>
+              <p className="text-xs text-muted-foreground">
+                {reviewData?.dueCount || 0} items due
+              </p>
             </CardContent>
           </Card>
         </Link>
@@ -215,7 +320,9 @@ export default function DashboardPage() {
             <CardContent className="p-4 flex flex-col items-center justify-center text-center">
               <TrendingUp className="h-8 w-8 text-green-500 mb-2" />
               <p className="font-medium">Leaderboard</p>
-              <p className="text-xs text-muted-foreground">Rank #42</p>
+              <p className="text-xs text-muted-foreground">
+                Rank #{leaderboardData?.userRank?.rank || "-"}
+              </p>
             </CardContent>
           </Card>
         </Link>
@@ -241,7 +348,7 @@ export default function DashboardPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {recentLessons.map((lesson) => (
+            {displayLessons.map((lesson) => (
               <Link key={lesson.id} href={`/learn/${lesson.id}`} className="block">
                 <div className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors">
                   <div>
@@ -249,7 +356,7 @@ export default function DashboardPage() {
                     <p className="text-sm text-muted-foreground">{lesson.category}</p>
                   </div>
                   <div className="flex items-center gap-3">
-                    {lesson.progress === 100 ? (
+                    {lesson.status === "completed" ? (
                       <Badge variant="success">Complete</Badge>
                     ) : lesson.progress > 0 ? (
                       <Badge variant="warning">{lesson.progress}%</Badge>

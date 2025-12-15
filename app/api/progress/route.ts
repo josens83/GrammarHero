@@ -27,14 +27,14 @@ export async function GET(request: NextRequest) {
 
     // Get user's lesson progress
     const { data: lessonProgress } = await supabase
-      .from("user_lesson_progress")
-      .select("*")
+      .from("user_progress")
+      .select("*, lessons(title, category_id, difficulty)")
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false });
 
-    // Get user's daily activity
+    // Get user's daily activity (streak history)
     const { data: dailyActivity } = await supabase
-      .from("user_daily_activity")
+      .from("streak_history")
       .select("*")
       .eq("user_id", user.id)
       .order("date", { ascending: false })
@@ -42,13 +42,13 @@ export async function GET(request: NextRequest) {
 
     // Calculate statistics
     const completedLessons = (lessonProgress || []).filter(
-      (p) => p.progress_percentage === 100
+      (p) => p.status === "completed"
     ).length;
     const totalLessons = lessonProgress?.length || 0;
     const averageScore =
       lessonProgress && lessonProgress.length > 0
         ? Math.round(
-            lessonProgress.reduce((acc, p) => acc + (p.best_score || 0), 0) /
+            lessonProgress.reduce((acc, p) => acc + (p.score || 0), 0) /
               lessonProgress.length
           )
         : 0;
@@ -57,6 +57,10 @@ export async function GET(request: NextRequest) {
     const weeklyXp = (dailyActivity || [])
       .slice(0, 7)
       .reduce((acc, d) => acc + (d.xp_earned || 0), 0);
+
+    // Calculate total time spent (convert minutes to seconds for compatibility)
+    const totalTimeMinutes = (dailyActivity || [])
+      .reduce((acc, d) => acc + (d.time_spent_minutes || 0), 0);
 
     return NextResponse.json({
       success: true,
@@ -68,6 +72,7 @@ export async function GET(request: NextRequest) {
           totalLessons,
           averageScore,
           weeklyXp,
+          totalTimeMinutes,
         },
       },
     });
@@ -99,7 +104,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { lessonId, progressPercentage, score, xpEarned, timeSpentSeconds } = body;
+    const { lessonId, status, score, xpEarned, timeSpentMinutes, isPerfect } = body;
 
     if (!lessonId) {
       return NextResponse.json(
@@ -108,35 +113,45 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Check if progress exists
+    const { data: existingProgress } = await supabase
+      .from("user_progress")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("lesson_id", lessonId)
+      .single();
+
+    const isCompleted = status === "completed";
+    const progressData = {
+      user_id: user.id,
+      lesson_id: lessonId,
+      status: status || "in_progress",
+      score: existingProgress
+        ? Math.max(existingProgress.score || 0, score || 0)
+        : (score || 0),
+      xp_earned: (existingProgress?.xp_earned || 0) + (xpEarned || 0),
+      attempts: (existingProgress?.attempts || 0) + 1,
+      completed_at: isCompleted ? new Date().toISOString() : existingProgress?.completed_at,
+    };
+
     // Upsert lesson progress
     const { data: progress, error: progressError } = await supabase
-      .from("user_lesson_progress")
-      .upsert(
-        {
-          user_id: user.id,
-          lesson_id: lessonId,
-          progress_percentage: progressPercentage,
-          best_score: score,
-          time_spent_seconds: timeSpentSeconds,
-          last_attempted_at: new Date().toISOString(),
-          completed_at: progressPercentage === 100 ? new Date().toISOString() : null,
-        },
-        {
-          onConflict: "user_id,lesson_id",
-          ignoreDuplicates: false,
-        }
-      )
+      .from("user_progress")
+      .upsert(progressData, {
+        onConflict: "user_id,lesson_id",
+      })
       .select()
       .single();
 
     if (progressError) {
       console.error("Progress upsert error:", progressError);
+      throw progressError;
     }
 
-    // Update daily activity
+    // Update daily activity (streak_history)
     const today = new Date().toISOString().split("T")[0];
     const { data: existingActivity } = await supabase
-      .from("user_daily_activity")
+      .from("streak_history")
       .select("*")
       .eq("user_id", user.id)
       .eq("date", today)
@@ -144,20 +159,24 @@ export async function POST(request: NextRequest) {
 
     if (existingActivity) {
       await supabase
-        .from("user_daily_activity")
+        .from("streak_history")
         .update({
-          lessons_completed: existingActivity.lessons_completed + (progressPercentage === 100 ? 1 : 0),
+          lessons_completed: existingActivity.lessons_completed + (isCompleted ? 1 : 0),
           xp_earned: existingActivity.xp_earned + (xpEarned || 0),
-          time_spent_seconds: existingActivity.time_spent_seconds + (timeSpentSeconds || 0),
+          time_spent_minutes: existingActivity.time_spent_minutes + (timeSpentMinutes || 0),
+          exercises_completed: existingActivity.exercises_completed + 1,
+          perfect_lessons: existingActivity.perfect_lessons + (isPerfect ? 1 : 0),
         })
         .eq("id", existingActivity.id);
     } else {
-      await supabase.from("user_daily_activity").insert({
+      await supabase.from("streak_history").insert({
         user_id: user.id,
         date: today,
-        lessons_completed: progressPercentage === 100 ? 1 : 0,
+        lessons_completed: isCompleted ? 1 : 0,
         xp_earned: xpEarned || 0,
-        time_spent_seconds: timeSpentSeconds || 0,
+        time_spent_minutes: timeSpentMinutes || 0,
+        exercises_completed: 1,
+        perfect_lessons: isPerfect ? 1 : 0,
       });
     }
 
@@ -165,7 +184,7 @@ export async function POST(request: NextRequest) {
     if (xpEarned) {
       const { data: profile } = await supabase
         .from("profiles")
-        .select("total_xp, current_streak, last_activity_date")
+        .select("total_xp, current_streak, longest_streak, last_activity_date, level")
         .eq("id", user.id)
         .single();
 
@@ -174,17 +193,29 @@ export async function POST(request: NextRequest) {
           ? new Date(profile.last_activity_date)
           : null;
         const now = new Date();
-        const isConsecutiveDay =
-          lastActivity &&
-          now.getTime() - lastActivity.getTime() < 48 * 60 * 60 * 1000 &&
-          now.toDateString() !== lastActivity.toDateString();
+        const todayDate = now.toDateString();
+        const lastActivityDate = lastActivity?.toDateString();
+
+        // Check if this is a new day of activity
+        let newStreak = profile.current_streak;
+        if (lastActivityDate !== todayDate) {
+          const yesterday = new Date(now);
+          yesterday.setDate(yesterday.getDate() - 1);
+          const isConsecutiveDay = lastActivityDate === yesterday.toDateString();
+          newStreak = isConsecutiveDay ? profile.current_streak + 1 : 1;
+        }
+
+        const newTotalXp = profile.total_xp + xpEarned;
+        const newLevel = Math.floor(newTotalXp / 1000) + 1;
 
         await supabase
           .from("profiles")
           .update({
-            total_xp: profile.total_xp + xpEarned,
-            current_streak: isConsecutiveDay ? profile.current_streak + 1 : 1,
+            total_xp: newTotalXp,
+            current_streak: newStreak,
+            longest_streak: Math.max(profile.longest_streak, newStreak),
             last_activity_date: now.toISOString(),
+            level: newLevel,
           })
           .eq("id", user.id);
       }

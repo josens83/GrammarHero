@@ -45,26 +45,27 @@ export async function GET(request: NextRequest) {
     const paginatedLessons = filteredLessons.slice(offset, offset + limit);
 
     // If user is authenticated, fetch their progress
-    let userProgress: Record<string, number> = {};
+    let userProgress: Record<string, { score: number; status: string }> = {};
     if (user) {
       const { data: progress } = await supabase
-        .from("user_lesson_progress")
-        .select("lesson_id, progress_percentage")
+        .from("user_progress")
+        .select("lesson_id, score, status")
         .eq("user_id", user.id);
 
       if (progress) {
         userProgress = progress.reduce((acc, p) => {
-          acc[p.lesson_id] = p.progress_percentage;
+          acc[p.lesson_id] = { score: p.score || 0, status: p.status };
           return acc;
-        }, {} as Record<string, number>);
+        }, {} as Record<string, { score: number; status: string }>);
       }
     }
 
     // Attach progress to lessons
     const lessonsWithProgress = paginatedLessons.map((lesson) => ({
       ...lesson,
-      userProgress: userProgress[lesson.id] || 0,
-      isCompleted: (userProgress[lesson.id] || 0) === 100,
+      userProgress: userProgress[lesson.id]?.score || 0,
+      status: userProgress[lesson.id]?.status || "available",
+      isCompleted: userProgress[lesson.id]?.status === "completed",
     }));
 
     return NextResponse.json({

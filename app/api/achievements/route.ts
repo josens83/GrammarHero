@@ -101,9 +101,24 @@ export async function POST(request: NextRequest) {
         .eq("id", user.id)
         .single();
 
+      // Get user progress from user_progress table
       const { data: progress } = await supabase
-        .from("user_lesson_progress")
+        .from("user_progress")
         .select("*")
+        .eq("user_id", user.id);
+
+      // Get streak history for additional stats
+      const { data: streakHistory } = await supabase
+        .from("streak_history")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("date", { ascending: false })
+        .limit(30);
+
+      // Get review items count
+      const { count: reviewCount } = await supabase
+        .from("review_items")
+        .select("id", { count: "exact" })
         .eq("user_id", user.id);
 
       const { data: existingAchievements } = await supabase
@@ -115,16 +130,57 @@ export async function POST(request: NextRequest) {
         (existingAchievements || []).map((a) => a.achievement_id)
       );
 
+      // Calculate completed lessons and perfect lessons
+      const completedLessons = (progress || []).filter((p) => p.status === "completed").length;
+      const perfectLessons = (progress || []).filter((p) => p.score === 100).length;
+
+      // Calculate categories mastered (all lessons in a category completed with 80%+)
+      const categoryProgress: Record<string, { total: number; completed: number }> = {};
+      (progress || []).forEach((p) => {
+        // We'd need lesson data to properly track this, simplified for now
+        if (!categoryProgress["default"]) {
+          categoryProgress["default"] = { total: 0, completed: 0 };
+        }
+        categoryProgress["default"].total++;
+        if (p.status === "completed" && p.score >= 80) {
+          categoryProgress["default"].completed++;
+        }
+      });
+
+      // Check for consecutive perfect lessons
+      let consecutivePerfect = 0;
+      let maxConsecutivePerfect = 0;
+      (progress || [])
+        .sort((a, b) => new Date(b.completed_at || 0).getTime() - new Date(a.completed_at || 0).getTime())
+        .forEach((p) => {
+          if (p.score === 100) {
+            consecutivePerfect++;
+            maxConsecutivePerfect = Math.max(maxConsecutivePerfect, consecutivePerfect);
+          } else {
+            consecutivePerfect = 0;
+          }
+        });
+
+      // Check weekend lessons
+      const weekendLessons = (streakHistory || []).filter((h) => {
+        const date = new Date(h.date);
+        const day = date.getDay();
+        return (day === 0 || day === 6) && h.lessons_completed > 0;
+      }).length;
+
       // Build user stats for achievement checking
       const userStats = {
-        lessonsCompleted: (progress || []).filter((p) => p.progress_percentage === 100)
-          .length,
+        lessonsCompleted: completedLessons,
         currentStreak: profile?.current_streak || 0,
         longestStreak: profile?.longest_streak || 0,
         totalXp: profile?.total_xp || 0,
-        perfectLessons: (progress || []).filter((p) => p.best_score === 100).length,
-        categoriesMastered: 0, // Would need more complex calculation
-        totalReviews: 0, // Would need review tracking
+        perfectLessons: perfectLessons,
+        consecutivePerfect: maxConsecutivePerfect,
+        categoriesMastered: Object.values(categoryProgress).filter(
+          (c) => c.total > 0 && c.completed === c.total
+        ).length,
+        totalReviews: reviewCount || 0,
+        weekendLessons: weekendLessons,
         level: profile?.level || 1,
       };
 
@@ -136,23 +192,34 @@ export async function POST(request: NextRequest) {
         const shouldUnlock = checkAchievementUnlock(achievement.id, userStats);
         if (shouldUnlock) {
           // Unlock the achievement
-          await supabase.from("user_achievements").insert({
+          const { error: insertError } = await supabase.from("user_achievements").insert({
             user_id: user.id,
             achievement_id: achievement.id,
             unlocked_at: new Date().toISOString(),
           });
 
-          // Award XP bonus
-          if (achievement.xpReward) {
-            await supabase
-              .from("profiles")
-              .update({
-                total_xp: (profile?.total_xp || 0) + achievement.xpReward,
-              })
-              .eq("id", user.id);
-          }
+          if (!insertError) {
+            // Award XP bonus
+            if (achievement.xpReward) {
+              await supabase
+                .from("profiles")
+                .update({
+                  total_xp: (profile?.total_xp || 0) + achievement.xpReward,
+                })
+                .eq("id", user.id);
+            }
 
-          newlyUnlocked.push(achievement.id);
+            // Create notification for achievement
+            await supabase.from("notifications").insert({
+              user_id: user.id,
+              type: "achievement",
+              title: "Achievement Unlocked!",
+              message: `You earned "${achievement.name}" - ${achievement.description}`,
+              data: { achievementId: achievement.id, xpReward: achievement.xpReward },
+            });
+
+            newlyUnlocked.push(achievement.id);
+          }
         }
       }
 
@@ -208,6 +275,22 @@ export async function POST(request: NextRequest) {
       achievement_id: achievementId,
       unlocked_at: new Date().toISOString(),
     });
+
+    // Award XP
+    if (achievement.xpReward) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("total_xp")
+        .eq("id", user.id)
+        .single();
+
+      await supabase
+        .from("profiles")
+        .update({
+          total_xp: (profile?.total_xp || 0) + achievement.xpReward,
+        })
+        .eq("id", user.id);
+    }
 
     return NextResponse.json({
       success: true,

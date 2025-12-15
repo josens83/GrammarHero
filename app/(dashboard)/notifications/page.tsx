@@ -5,13 +5,13 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useUser } from "@/hooks/useUser";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { PageLoader } from "@/components/common/LoadingSpinner";
 import {
@@ -27,7 +27,6 @@ import {
   Settings,
   Crown,
   Target,
-  Calendar,
   Star,
 } from "lucide-react";
 import { cn, formatRelativeTime } from "@/lib/utils";
@@ -35,85 +34,13 @@ import Link from "next/link";
 
 interface Notification {
   id: string;
-  type: "achievement" | "streak" | "xp" | "reminder" | "update" | "reward" | "challenge";
+  type: "achievement" | "streak" | "challenge" | "system" | "social";
   title: string;
   message: string;
-  timestamp: Date;
+  created_at: string;
   read: boolean;
-  actionUrl?: string;
-  actionText?: string;
-  icon?: string;
+  data?: Record<string, unknown>;
 }
-
-// Demo notifications
-const DEMO_NOTIFICATIONS: Notification[] = [
-  {
-    id: "1",
-    type: "achievement",
-    title: "Achievement Unlocked!",
-    message: "You earned the 'First Steps' badge for completing your first lesson.",
-    timestamp: new Date(Date.now() - 1000 * 60 * 30), // 30 mins ago
-    read: false,
-    actionUrl: "/profile?tab=achievements",
-    actionText: "View Badge",
-  },
-  {
-    id: "2",
-    type: "streak",
-    title: "Streak at Risk! 🔥",
-    message: "You haven't practiced today. Complete a lesson to maintain your 7-day streak!",
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2), // 2 hours ago
-    read: false,
-    actionUrl: "/learn",
-    actionText: "Practice Now",
-  },
-  {
-    id: "3",
-    type: "xp",
-    title: "Level Up! 🎉",
-    message: "Congratulations! You've reached Level 5. Keep up the great work!",
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24), // 1 day ago
-    read: true,
-  },
-  {
-    id: "4",
-    type: "challenge",
-    title: "Daily Challenge Available",
-    message: "Today's challenge: Complete 5 exercises in under 10 minutes!",
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3), // 3 hours ago
-    read: false,
-    actionUrl: "/challenge",
-    actionText: "Start Challenge",
-  },
-  {
-    id: "5",
-    type: "reward",
-    title: "Weekly Streak Reward",
-    message: "You maintained a 7-day streak! Enjoy 50 bonus XP.",
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 2), // 2 days ago
-    read: true,
-  },
-  {
-    id: "6",
-    type: "update",
-    title: "New Grammar Lessons Added",
-    message: "Check out our new Advanced Conditionals and Reported Speech lessons!",
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 3), // 3 days ago
-    read: true,
-    actionUrl: "/learn",
-    actionText: "Explore Lessons",
-  },
-  {
-    id: "7",
-    type: "reminder",
-    title: "Review Time!",
-    message: "You have 5 items due for review. Strengthen your memory now!",
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 5), // 5 hours ago
-    read: false,
-    actionUrl: "/review",
-    actionText: "Start Review",
-  },
-];
 
 const getNotificationIcon = (type: Notification["type"]) => {
   switch (type) {
@@ -121,16 +48,12 @@ const getNotificationIcon = (type: Notification["type"]) => {
       return <Trophy className="h-5 w-5 text-yellow-500" />;
     case "streak":
       return <Flame className="h-5 w-5 text-orange-500" />;
-    case "xp":
-      return <Zap className="h-5 w-5 text-primary" />;
-    case "reminder":
-      return <AlertCircle className="h-5 w-5 text-blue-500" />;
-    case "update":
-      return <Star className="h-5 w-5 text-purple-500" />;
-    case "reward":
-      return <Gift className="h-5 w-5 text-pink-500" />;
     case "challenge":
       return <Target className="h-5 w-5 text-green-500" />;
+    case "social":
+      return <Gift className="h-5 w-5 text-pink-500" />;
+    case "system":
+      return <Star className="h-5 w-5 text-purple-500" />;
     default:
       return <Bell className="h-5 w-5" />;
   }
@@ -142,50 +65,112 @@ const getNotificationColor = (type: Notification["type"]) => {
       return "bg-yellow-500/10 border-yellow-500/20";
     case "streak":
       return "bg-orange-500/10 border-orange-500/20";
-    case "xp":
-      return "bg-primary/10 border-primary/20";
-    case "reminder":
-      return "bg-blue-500/10 border-blue-500/20";
-    case "update":
-      return "bg-purple-500/10 border-purple-500/20";
-    case "reward":
-      return "bg-pink-500/10 border-pink-500/20";
     case "challenge":
       return "bg-green-500/10 border-green-500/20";
+    case "social":
+      return "bg-pink-500/10 border-pink-500/20";
+    case "system":
+      return "bg-purple-500/10 border-purple-500/20";
     default:
       return "bg-muted";
   }
 };
 
+const getActionUrl = (notification: Notification): string | undefined => {
+  switch (notification.type) {
+    case "achievement":
+      return "/profile?tab=achievements";
+    case "streak":
+      return "/learn";
+    case "challenge":
+      return "/challenge";
+    default:
+      return undefined;
+  }
+};
+
 export default function NotificationsPage() {
   const { user, isLoading } = useUser();
-  const [notifications, setNotifications] = useState(DEMO_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
   const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [unreadCount, setUnreadCount] = useState(0);
 
-  if (isLoading) return <PageLoader />;
-  if (!user) return <PageLoader />;
+  // Fetch notifications
+  useEffect(() => {
+    const fetchNotifications = async () => {
+      try {
+        const res = await fetch("/api/notifications");
+        if (res.ok) {
+          const data = await res.json();
+          setNotifications(data.data.notifications || []);
+          setUnreadCount(data.data.unreadCount || 0);
+        }
+      } catch (error) {
+        console.error("Failed to fetch notifications:", error);
+      } finally {
+        setIsLoadingData(false);
+      }
+    };
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+    if (user) {
+      fetchNotifications();
+    }
+  }, [user]);
+
   const filteredNotifications =
     filter === "unread" ? notifications.filter((n) => !n.read) : notifications;
 
-  const markAsRead = (id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
+  const markAsRead = async (id: string) => {
+    try {
+      await fetch("/api/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notificationId: id }),
+      });
+
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+    } catch (error) {
+      console.error("Failed to mark as read:", error);
+    }
   };
 
-  const markAllAsRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  const markAllAsRead = async () => {
+    try {
+      await fetch("/api/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markAllRead: true }),
+      });
+
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+      setUnreadCount(0);
+    } catch (error) {
+      console.error("Failed to mark all as read:", error);
+    }
   };
 
-  const deleteNotification = (id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  const deleteNotification = async (id: string) => {
+    try {
+      await fetch(`/api/notifications?id=${id}`, {
+        method: "DELETE",
+      });
+
+      const notification = notifications.find((n) => n.id === id);
+      if (notification && !notification.read) {
+        setUnreadCount((prev) => Math.max(0, prev - 1));
+      }
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    } catch (error) {
+      console.error("Failed to delete notification:", error);
+    }
   };
 
-  const clearAll = () => {
-    setNotifications([]);
-  };
+  if (isLoading || isLoadingData) return <PageLoader />;
+  if (!user) return <PageLoader />;
 
   return (
     <div className="p-6 space-y-6 max-w-3xl mx-auto">
@@ -235,12 +220,6 @@ export default function NotificationsPage() {
                   Mark all read
                 </Button>
               )}
-              {notifications.length > 0 && (
-                <Button variant="ghost" size="sm" onClick={clearAll}>
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Clear all
-                </Button>
-              )}
             </div>
           </div>
         </CardContent>
@@ -256,7 +235,7 @@ export default function NotificationsPage() {
               <p className="text-sm text-muted-foreground">
                 {filter === "unread"
                   ? "You've read all your notifications!"
-                  : "You don't have any notifications yet."}
+                  : "You don't have any notifications yet. Complete lessons to earn achievements!"}
               </p>
             </div>
           ) : (
@@ -302,13 +281,13 @@ export default function NotificationsPage() {
 
                       <div className="flex items-center justify-between mt-3">
                         <span className="text-xs text-muted-foreground">
-                          {formatRelativeTime(notification.timestamp)}
+                          {formatRelativeTime(new Date(notification.created_at))}
                         </span>
                         <div className="flex gap-2">
-                          {notification.actionUrl && (
+                          {getActionUrl(notification) && (
                             <Button variant="link" size="sm" className="h-auto p-0" asChild>
-                              <Link href={notification.actionUrl}>
-                                {notification.actionText || "View"}
+                              <Link href={getActionUrl(notification)!}>
+                                View
                               </Link>
                             </Button>
                           )}
@@ -346,7 +325,7 @@ export default function NotificationsPage() {
         <Card>
           <CardContent className="p-4 text-center">
             <Trophy className="h-6 w-6 text-yellow-500 mx-auto mb-2" />
-            <p className="text-2xl font-bold">5</p>
+            <p className="text-2xl font-bold">-</p>
             <p className="text-xs text-muted-foreground">Achievements</p>
           </CardContent>
         </Card>

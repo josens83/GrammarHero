@@ -38,7 +38,7 @@ export async function GET(
     let userProgress = null;
     if (user) {
       const { data: progress } = await supabase
-        .from("user_lesson_progress")
+        .from("user_progress")
         .select("*")
         .eq("user_id", user.id)
         .eq("lesson_id", lessonId)

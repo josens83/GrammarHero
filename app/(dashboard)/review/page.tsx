@@ -1,6 +1,6 @@
 /**
  * @fileoverview Review Page
- * @description Spaced repetition review session page
+ * @description Spaced repetition review session page with real API integration
  */
 
 "use client";
@@ -10,7 +10,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Brain,
   Clock,
-  Zap,
   ChevronRight,
   RotateCcw,
   CheckCircle,
@@ -28,64 +27,38 @@ import { Badge } from "@/components/ui/badge";
 import { PageLoader } from "@/components/common/LoadingSpinner";
 import { useUser } from "@/hooks/useUser";
 import { useSound } from "@/hooks/use-sound";
-import {
-  ReviewItem,
-  getReviewStats,
-  getDueItems,
-  updateReviewItem,
-  performanceToQuality,
-  getItemStrength,
-  createReviewItem,
-} from "@/lib/review/spaced-repetition";
 import { cn } from "@/lib/utils";
 
 type ReviewPhase = "overview" | "session" | "complete";
 
-// Demo review items
-const DEMO_REVIEW_ITEMS: ReviewItem[] = [
-  createReviewItem(
-    "present-simple",
-    "1",
-    "He ___ to work every day.",
-    "goes",
-    "Tenses"
-  ),
-  createReviewItem(
-    "articles",
-    "2",
-    "I saw ___ elephant at the zoo.",
-    "an",
-    "Articles"
-  ),
-  createReviewItem(
-    "prepositions",
-    "3",
-    "The meeting is ___ Monday.",
-    "on",
-    "Prepositions"
-  ),
-  createReviewItem(
-    "past-simple",
-    "4",
-    "She ___ to Paris last year.",
-    "went",
-    "Tenses"
-  ),
-  createReviewItem(
-    "articles",
-    "5",
-    "___ sun rises in the east.",
-    "The",
-    "Articles"
-  ),
-];
+interface ReviewItem {
+  id: string;
+  lesson_id: string;
+  exercise_id: string;
+  question: string;
+  correct_answer: string;
+  category: string;
+  difficulty: string;
+  ease_factor: number;
+  interval_days: number;
+  repetitions: number;
+  next_review_date: string;
+}
+
+function getItemStrength(item: ReviewItem): "new" | "learning" | "strong" | "mastered" {
+  if (item.repetitions === 0) return "new";
+  if (item.interval_days < 7) return "learning";
+  if (item.interval_days < 30) return "strong";
+  return "mastered";
+}
 
 export default function ReviewPage() {
   const { user, isLoading } = useUser();
   const { playSound } = useSound();
 
   const [phase, setPhase] = useState<ReviewPhase>("overview");
-  const [reviewItems, setReviewItems] = useState<ReviewItem[]>(DEMO_REVIEW_ITEMS);
+  const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [userAnswer, setUserAnswer] = useState("");
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -99,9 +72,47 @@ export default function ReviewPage() {
     xpEarned: number;
   }>({ correct: 0, incorrect: 0, xpEarned: 0 });
 
-  // Get due items
-  const dueItems = useMemo(() => getDueItems(reviewItems), [reviewItems]);
-  const stats = useMemo(() => getReviewStats(reviewItems), [reviewItems]);
+  // Fetch review items
+  useEffect(() => {
+    const fetchReviewItems = async () => {
+      try {
+        const res = await fetch("/api/review?due=true&limit=50");
+        if (res.ok) {
+          const data = await res.json();
+          setReviewItems(data.data.items || []);
+        }
+      } catch (error) {
+        console.error("Failed to fetch review items:", error);
+      } finally {
+        setIsLoadingData(false);
+      }
+    };
+
+    if (user) {
+      fetchReviewItems();
+    }
+  }, [user]);
+
+  // Calculate stats
+  const stats = useMemo(() => {
+    const today = new Date().toISOString().split("T")[0];
+    const weekFromNow = new Date();
+    weekFromNow.setDate(weekFromNow.getDate() + 7);
+    const weekDate = weekFromNow.toISOString().split("T")[0];
+
+    const dueToday = reviewItems.filter((item) => item.next_review_date <= today).length;
+    const dueThisWeek = reviewItems.filter((item) => item.next_review_date <= weekDate).length;
+    const learned = reviewItems.filter((item) => item.repetitions > 0).length;
+    const mastered = reviewItems.filter((item) => item.interval_days >= 30).length;
+
+    return { dueToday, dueThisWeek, learned, mastered };
+  }, [reviewItems]);
+
+  // Due items
+  const dueItems = useMemo(() => {
+    const today = new Date().toISOString().split("T")[0];
+    return reviewItems.filter((item) => item.next_review_date <= today);
+  }, [reviewItems]);
 
   // Current item
   const currentItem = dueItems[currentIndex];
@@ -116,21 +127,39 @@ export default function ReviewPage() {
     setSessionResults({ correct: 0, incorrect: 0, xpEarned: 0 });
   };
 
+  // Calculate quality based on performance
+  const calculateQuality = (correct: boolean, responseTime: number, usedHint: boolean): number => {
+    if (!correct) return usedHint ? 0 : 1;
+    if (usedHint) return 3;
+    if (responseTime < 3000) return 5; // Fast and correct
+    if (responseTime < 8000) return 4; // Medium speed
+    return 3; // Slow but correct
+  };
+
   // Submit answer
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!currentItem || !questionStartTime) return;
 
     const responseTime = Date.now() - questionStartTime.getTime();
     const correct =
       userAnswer.toLowerCase().trim() ===
-      currentItem.correctAnswer.toLowerCase().trim();
-    const quality = performanceToQuality(correct, responseTime, showHint);
+      currentItem.correct_answer.toLowerCase().trim();
+    const quality = calculateQuality(correct, responseTime, showHint);
 
-    // Update the review item
-    const updatedItem = updateReviewItem(currentItem, quality);
-    setReviewItems((prev) =>
-      prev.map((item) => (item.id === updatedItem.id ? updatedItem : item))
-    );
+    // Update the review item via API
+    try {
+      await fetch("/api/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "review",
+          itemId: currentItem.id,
+          quality,
+        }),
+      });
+    } catch (error) {
+      console.error("Failed to update review item:", error);
+    }
 
     // Update session results
     const xp = correct ? 5 : 0;
@@ -172,7 +201,7 @@ export default function ReviewPage() {
     }
   };
 
-  if (isLoading) return <PageLoader />;
+  if (isLoading || isLoadingData) return <PageLoader />;
   if (!user) return <PageLoader />;
 
   return (
@@ -284,7 +313,7 @@ export default function ReviewPage() {
                         <div>
                           <p className="font-medium">{item.question}</p>
                           <p className="text-sm text-muted-foreground">
-                            {item.category}
+                            {item.category || "Grammar"}
                           </p>
                         </div>
                         <Badge
@@ -314,8 +343,9 @@ export default function ReviewPage() {
                   <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-4" />
                   <h2 className="text-xl font-bold mb-2">All caught up!</h2>
                   <p className="text-muted-foreground mb-4">
-                    No items due for review. Learn new lessons to add more
-                    items!
+                    {reviewItems.length === 0
+                      ? "Complete lessons to add items to your review queue!"
+                      : "No items due for review today. Check back later!"}
                   </p>
                   <Button asChild>
                     <Link href="/learn">Go to Lessons</Link>
@@ -342,7 +372,7 @@ export default function ReviewPage() {
                   Question {currentIndex + 1} of {dueItems.length}
                 </span>
                 <span className="text-muted-foreground">
-                  {currentItem.category}
+                  {currentItem.category || "Grammar"}
                 </span>
               </div>
               <Progress
@@ -386,7 +416,7 @@ export default function ReviewPage() {
                   >
                     Correct answer:{" "}
                     <span className="font-bold text-green-600">
-                      {currentItem.correctAnswer}
+                      {currentItem.correct_answer}
                     </span>
                   </motion.p>
                 )}
@@ -436,7 +466,7 @@ export default function ReviewPage() {
                     animate={{ opacity: 1, y: 0 }}
                     className="text-sm text-amber-600 bg-amber-50 px-4 py-2 rounded-lg inline-block"
                   >
-                    First letter: {currentItem.correctAnswer[0]}
+                    First letter: {currentItem.correct_answer[0]}
                   </motion.p>
                 )}
               </div>
@@ -517,22 +547,26 @@ export default function ReviewPage() {
                   </div>
                 </div>
 
-                <Progress
-                  value={
-                    (sessionResults.correct /
-                      (sessionResults.correct + sessionResults.incorrect)) *
-                    100
-                  }
-                  className="h-3"
-                />
-                <p className="text-sm text-muted-foreground">
-                  {Math.round(
-                    (sessionResults.correct /
-                      (sessionResults.correct + sessionResults.incorrect)) *
-                      100
-                  )}
-                  % accuracy
-                </p>
+                {(sessionResults.correct + sessionResults.incorrect) > 0 && (
+                  <>
+                    <Progress
+                      value={
+                        (sessionResults.correct /
+                          (sessionResults.correct + sessionResults.incorrect)) *
+                        100
+                      }
+                      className="h-3"
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      {Math.round(
+                        (sessionResults.correct /
+                          (sessionResults.correct + sessionResults.incorrect)) *
+                          100
+                      )}
+                      % accuracy
+                    </p>
+                  </>
+                )}
               </CardContent>
             </Card>
 
@@ -542,6 +576,9 @@ export default function ReviewPage() {
                 onClick={() => {
                   setPhase("overview");
                   setCurrentIndex(0);
+                  setUserAnswer("");
+                  setIsSubmitted(false);
+                  setShowHint(false);
                 }}
                 className="w-full"
               >

@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     // Build query based on period
     let query = supabase
       .from("profiles")
-      .select("id, display_name, avatar_url, total_xp, current_streak, level")
+      .select("id, display_name, username, avatar_url, total_xp, current_streak, level")
       .order("total_xp", { ascending: false })
       .limit(limit);
 
@@ -70,9 +70,9 @@ export async function GET(request: NextRequest) {
         startDate.setHours(0, 0, 0, 0);
       }
 
-      // Get activity data for the period
+      // Get activity data for the period from streak_history
       const { data: activity } = await supabase
-        .from("user_daily_activity")
+        .from("streak_history")
         .select("user_id, xp_earned")
         .gte("date", startDate.toISOString().split("T")[0]);
 
@@ -88,6 +88,7 @@ export async function GET(request: NextRequest) {
           ...profile,
           periodXp: periodXp[profile.id] || 0,
         }))
+        .filter((p) => p.periodXp > 0)
         .sort((a, b) => b.periodXp - a.periodXp);
     }
 
@@ -95,7 +96,7 @@ export async function GET(request: NextRequest) {
     const rankedData = leaderboardData.map((entry, index) => ({
       ...entry,
       rank: index + 1,
-      previousRank: index + 1 + Math.floor(Math.random() * 5) - 2, // Simulated previous rank
+      displayName: entry.display_name || entry.username || `Player ${index + 1}`,
     }));
 
     // Get current user's position
@@ -111,7 +112,7 @@ export async function GET(request: NextRequest) {
         // User not in top list, find their actual rank
         const { data: userProfile } = await supabase
           .from("profiles")
-          .select("total_xp")
+          .select("total_xp, display_name, username, level, current_streak")
           .eq("id", user.id)
           .single();
 
@@ -125,6 +126,9 @@ export async function GET(request: NextRequest) {
             id: user.id,
             rank: (count || 0) + 1,
             total_xp: userProfile.total_xp,
+            displayName: userProfile.display_name || userProfile.username || "You",
+            level: userProfile.level,
+            current_streak: userProfile.current_streak,
           };
         }
       }
