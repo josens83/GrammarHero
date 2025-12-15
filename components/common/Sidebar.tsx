@@ -6,10 +6,26 @@ import { cn } from "@/lib/utils";
 import { useUser } from "@/hooks/useUser";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Home, Book, PenTool, Trophy, User, Flame, Heart, Crown, Zap, Target, BarChart3, Brain } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
+import {
+  Home,
+  Book,
+  PenTool,
+  Trophy,
+  User,
+  Flame,
+  Heart,
+  Crown,
+  Target,
+  BarChart3,
+  Brain,
+  Settings,
+  Bell,
+  HelpCircle,
+} from "lucide-react";
 import { getXPForNextLevel } from "@/lib/utils";
 
-const navItems = [
+const mainNavItems = [
   { href: "/dashboard", label: "Home", icon: Home },
   { href: "/learn", label: "Learn", icon: Book },
   { href: "/challenge", label: "Daily Challenge", icon: Target },
@@ -17,7 +33,13 @@ const navItems = [
   { href: "/practice", label: "Practice", icon: PenTool },
   { href: "/stats", label: "Statistics", icon: BarChart3 },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
+];
+
+const secondaryNavItems = [
   { href: "/profile", label: "Profile", icon: User },
+  { href: "/notifications", label: "Notifications", icon: Bell },
+  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/help", label: "Help", icon: HelpCircle },
 ];
 
 export function Sidebar() {
@@ -29,7 +51,23 @@ export function Sidebar() {
     <aside className="hidden md:flex w-64 flex-col border-r bg-card">
       <div className="flex-1 overflow-auto py-4">
         <nav className="space-y-1 px-3">
-          {navItems.map((item) => {
+          {mainNavItems.map((item) => {
+            const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
+            return (
+              <Link key={item.href} href={item.href}>
+                <Button variant={isActive ? "secondary" : "ghost"} className={cn("w-full justify-start gap-3", isActive && "bg-primary/10 text-primary hover:bg-primary/20")}>
+                  <item.icon className="h-5 w-5" />
+                  {item.label}
+                </Button>
+              </Link>
+            );
+          })}
+        </nav>
+
+        <Separator className="my-4 mx-3" />
+
+        <nav className="space-y-1 px-3">
+          {secondaryNavItems.map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link key={item.href} href={item.href}>
